@@ -1,0 +1,662 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Multi-tenant: Firma/Sklep
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  subdomain   String?  @unique
+  customDomain String? @unique
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  users           User[]
+  products        Product[]
+  paperTypes      PaperType[]
+  finishTypes     FinishType[]
+  formats         Format[]
+  pricingRules    PricingRule[]
+  discountCodes   DiscountCode[]
+  deliveryMethods DeliveryMethod[]
+  orders          Order[]
+  customers       Customer[]
+  settings        TenantSettings?
+  pages           Page[]
+  faqItems        FaqItem[]
+  emailTemplates  EmailTemplate[]
+
+  @@index([slug])
+  @@index([subdomain])
+}
+
+// Ustawienia firmy
+model TenantSettings {
+  id                    String   @id @default(cuid())
+  tenantId              String   @unique
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Branding
+  logoUrl               String?
+  primaryColor          String   @default("#1e40af")
+  secondaryColor        String   @default("#3b82f6")
+  accentColor           String   @default("#f59e0b")
+  fontFamily            String   @default("Inter")
+
+  // SEO
+  siteTitle             String   @default("Zamow zdjecia online")
+  siteDescription       String   @default("Profesjonalny wydruk zdjec online")
+  metaKeywords          String?
+
+  // Business
+  companyName           String?
+  companyAddress        String?
+  companyNip            String?
+  companyPhone          String?
+  companyEmail          String?
+
+  // Features
+  allowGuestCheckout    Boolean  @default(true)
+  showPricesWithVat     Boolean  @default(true)
+  vatRate               Float    @default(23)
+  minOrderValue         Float    @default(0)
+
+  // Upload settings
+  maxUploadSizeMb       Int      @default(50)
+  maxFilesPerOrder      Int      @default(100)
+  allowedFileTypes      String   @default("image/jpeg,image/png,image/webp,image/tiff")
+
+  // Cropping defaults
+  defaultCropMode       String   @default("fit") // fit, fill
+  showQualityWarnings   Boolean  @default(true)
+  minDpi                Int      @default(150)
+  recommendedDpi        Int      @default(300)
+
+  // Retention
+  originalRetentionDays Int      @default(90)
+
+  // Legal
+  privacyPolicyUrl      String?
+  termsUrl              String?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+// Uzytkownicy (pracownicy firmy)
+model User {
+  id            String    @id @default(cuid())
+  email         String
+  passwordHash  String
+  name          String
+  role          UserRole  @default(WORKER)
+  isActive      Boolean   @default(true)
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  orderNotes    OrderNote[]
+
+  @@unique([email, tenantId])
+  @@index([tenantId])
+}
+
+enum UserRole {
+  ADMIN       // Pelny dostep
+  MANAGER     // Zarzadzanie zamowieniami, produktami, bez ustawien
+  WORKER      // Realizacja zamowien
+  SUPPORT     // Obsluga klienta, podglad
+}
+
+// Klienci (kupujacy)
+model Customer {
+  id              String    @id @default(cuid())
+  email           String
+  passwordHash    String?   // null = guest
+  name            String?
+  phone           String?
+  isVerified      Boolean   @default(false)
+  marketingConsent Boolean  @default(false)
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  lastLoginAt     DateTime?
+  tags            String[]  @default([])
+  notes           String?
+
+  orders          Order[]
+  addresses       CustomerAddress[]
+
+  @@unique([email, tenantId])
+  @@index([tenantId])
+}
+
+model CustomerAddress {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  name        String
+  street      String
+  city        String
+  postalCode  String
+  country     String   @default("Polska")
+  phone       String?
+  isDefault   Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([customerId])
+}
+
+// Produkty (typy: odbitka, plakat, fotoalbum, obraz na plotnie)
+model Product {
+  id          String      @id @default(cuid())
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  slug        String
+  description String?
+  type        ProductType
+  isActive    Boolean     @default(true)
+  sortOrder   Int         @default(0)
+
+  // Multi-photo products (albums)
+  minPhotos   Int         @default(1)
+  maxPhotos   Int         @default(1)
+
+  // Base settings
+  allowBorder Boolean     @default(true)
+  allowExpress Boolean    @default(true)
+  expressSurcharge Float  @default(0) // percentage or flat
+  expressSurchargeType String @default("percentage") // percentage, flat
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  formats     ProductFormat[]
+  orderItems  OrderItem[]
+
+  @@unique([slug, tenantId])
+  @@index([tenantId])
+  @@index([type])
+}
+
+enum ProductType {
+  PRINT       // Odbitka
+  POSTER      // Plakat
+  ALBUM       // Fotoalbum
+  CANVAS      // Obraz na plotnie
+  CALENDAR    // Kalendarz
+  OTHER       // Inne
+}
+
+// Formaty (np. 10x15, 20x30)
+model Format {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String   // "10x15", "20x30"
+  widthMm     Int
+  heightMm    Int
+  isSquare    Boolean  @default(false)
+  isCustom    Boolean  @default(false)
+  minDpi      Int      @default(150)
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  productFormats ProductFormat[]
+
+  @@unique([name, tenantId])
+  @@index([tenantId])
+}
+
+// Powiazanie produktu z formatem i cena bazowa
+model ProductFormat {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  formatId    String
+  format      Format   @relation(fields: [formatId], references: [id], onDelete: Cascade)
+
+  basePrice   Float    // Cena bazowa netto
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  pricingRules PricingRule[]
+  orderItemPhotos OrderItemPhoto[]
+
+  @@unique([productId, formatId])
+  @@index([productId])
+  @@index([formatId])
+}
+
+// Typ papieru
+model PaperType {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String   // "Matowy", "Blyszczacy", "Satyna"
+  description String?
+  surcharge   Float    @default(0) // Doplata netto
+  surchargeType String @default("flat") // flat, percentage
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orderItemPhotos OrderItemPhoto[]
+
+  @@unique([name, tenantId])
+  @@index([tenantId])
+}
+
+// Typ wykonczenia
+model FinishType {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String   // "Standard", "Laminat UV", "Ramka"
+  description String?
+  surcharge   Float    @default(0)
+  surchargeType String @default("flat") // flat, percentage
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orderItemPhotos OrderItemPhoto[]
+
+  @@unique([name, tenantId])
+  @@index([tenantId])
+}
+
+// Reguly cenowe (progi ilosciowe)
+model PricingRule {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  productFormatId String?
+  productFormat   ProductFormat? @relation(fields: [productFormatId], references: [id], onDelete: Cascade)
+
+  name            String?
+  minQuantity     Int      @default(1)
+  maxQuantity     Int?     // null = bez limitu
+  pricePerUnit    Float    // Cena netto za sztuke w tym progu
+  discountPercent Float?   // lub rabat procentowy od ceny bazowej
+
+  isActive        Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([productFormatId])
+}
+
+// Kody rabatowe
+model DiscountCode {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  code            String
+  description     String?
+  discountType    DiscountType
+  discountValue   Float    // wartosc lub procent
+  minOrderValue   Float?   // minimalna wartosc zamowienia
+  maxUses         Int?     // maks liczba uzyc
+  usedCount       Int      @default(0)
+  validFrom       DateTime @default(now())
+  validTo         DateTime?
+  isActive        Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  orders          Order[]
+
+  @@unique([code, tenantId])
+  @@index([tenantId])
+}
+
+enum DiscountType {
+  PERCENTAGE  // rabat procentowy
+  FIXED       // rabat kwotowy
+  FREE_SHIPPING // darmowa dostawa
+}
+
+// Metody dostawy
+model DeliveryMethod {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name            String   // "Kurier DPD", "Paczkomat InPost", "Odbior osobisty"
+  description     String?
+  type            DeliveryType
+  price           Float    // cena netto
+  freeThreshold   Float?   // prog darmowej dostawy
+  estimatedDays   String?  // "1-2 dni robocze"
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(0)
+
+  // Dla odbioru osobistego
+  pickupAddress   String?
+  pickupHours     String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  orders          Order[]
+
+  @@unique([name, tenantId])
+  @@index([tenantId])
+}
+
+enum DeliveryType {
+  COURIER       // Kurier
+  PARCEL_LOCKER // Paczkomat
+  PICKUP        // Odbior osobisty
+  POSTAL        // Poczta
+}
+
+// Zamowienia
+model Order {
+  id                String      @id @default(cuid())
+  orderNumber       String
+  tenantId          String
+  tenant            Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId        String?
+  customer          Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  status            OrderStatus @default(NEW)
+
+  // Dane kontaktowe (kopia dla historii)
+  customerEmail     String
+  customerName      String
+  customerPhone     String?
+
+  // Adres dostawy
+  shippingName      String?
+  shippingStreet    String?
+  shippingCity      String?
+  shippingPostalCode String?
+  shippingCountry   String?
+  shippingPhone     String?
+
+  // Dostawa
+  deliveryMethodId  String?
+  deliveryMethod    DeliveryMethod? @relation(fields: [deliveryMethodId], references: [id], onDelete: SetNull)
+  deliveryPrice     Float       @default(0)
+  trackingNumber    String?
+
+  // Rabat
+  discountCodeId    String?
+  discountCode      DiscountCode? @relation(fields: [discountCodeId], references: [id], onDelete: SetNull)
+  discountAmount    Float       @default(0)
+
+  // Ceny
+  subtotalNet       Float       // suma pozycji netto
+  vatAmount         Float       // VAT
+  totalGross        Float       // suma brutto z dostawa
+
+  // Platnosc
+  paymentMethod     String?     // "online", "transfer"
+  paymentStatus     PaymentStatus @default(PENDING)
+  paymentId         String?     // ID z bramki
+  paidAt            DateTime?
+
+  // Opcje
+  isExpress         Boolean     @default(false)
+  expressCharge     Float       @default(0)
+
+  // Notatki
+  customerNotes     String?
+  internalNotes     String?
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  completedAt       DateTime?
+
+  items             OrderItem[]
+  notes             OrderNote[]
+  statusHistory     OrderStatusHistory[]
+
+  @@unique([orderNumber, tenantId])
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum OrderStatus {
+  NEW           // Nowe
+  PENDING_PAYMENT // Oczekuje na platnosc
+  PAID          // Oplacone
+  PROCESSING    // W realizacji
+  PRINTING      // Drukowanie
+  READY         // Gotowe do wysylki
+  SHIPPED       // Wyslane
+  DELIVERED     // Dostarczone
+  COMPLETED     // Zakonczone
+  CANCELLED     // Anulowane
+  REFUNDED      // Zwrocone
+}
+
+enum PaymentStatus {
+  PENDING       // Oczekuje
+  PROCESSING    // W trakcie
+  COMPLETED     // Zaplacone
+  FAILED        // Nieudane
+  REFUNDED      // Zwrocone
+  CANCELLED     // Anulowane
+}
+
+// Pozycje zamowienia (dla albumow - jeden item z wieloma zdjeciami)
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  quantity    Int      @default(1) // dla albumow = 1, dla odbitek = 1 (kazde zdjecie osobno)
+  unitPriceNet Float
+  totalPriceNet Float
+
+  // Album-specific
+  albumTitle  String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  photos      OrderItemPhoto[]
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+// Zdjecia w pozycji zamowienia
+model OrderItemPhoto {
+  id              String   @id @default(cuid())
+  orderItemId     String
+  orderItem       OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  // Plik
+  originalPath    String   // sciezka do oryginalu
+  thumbnailPath   String?  // miniatura
+  previewPath     String?  // podglad
+  originalName    String
+  fileSize        Int
+  mimeType        String
+
+  // Wymiary
+  widthPx         Int
+  heightPx        Int
+
+  // Wybrany format/opcje
+  productFormatId String?
+  productFormat   ProductFormat? @relation(fields: [productFormatId], references: [id], onDelete: SetNull)
+  paperTypeId     String?
+  paperType       PaperType? @relation(fields: [paperTypeId], references: [id], onDelete: SetNull)
+  finishTypeId    String?
+  finishType      FinishType? @relation(fields: [finishTypeId], references: [id], onDelete: SetNull)
+
+  // Kadrowanie
+  cropMode        String   @default("fit") // fit, fill
+  cropX           Float?   // pozycja kadru (0-1)
+  cropY           Float?
+  cropWidth       Float?
+  cropHeight      Float?
+  rotation        Int      @default(0) // 0, 90, 180, 270
+
+  // Opcje
+  borderMm        Int      @default(0) // biala ramka w mm
+  copies          Int      @default(1)
+
+  // Jakosc
+  effectiveDpi    Int?     // DPI dla wybranego formatu
+  qualityWarning  String?  // ostrzezenie o jakosci
+
+  // Cena tej pozycji
+  unitPriceNet    Float    @default(0)
+  totalPriceNet   Float    @default(0)
+
+  // Status przetwarzania
+  processingStatus String  @default("pending") // pending, processing, ready, error
+  processingError  String?
+
+  sortOrder       Int      @default(0)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([orderItemId])
+  @@index([processingStatus])
+}
+
+// Historia statusow zamowienia
+model OrderStatusHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  status    OrderStatus
+  note      String?
+  createdBy String?     // user id lub "system"
+
+  createdAt DateTime    @default(now())
+
+  @@index([orderId])
+}
+
+// Notatki do zamowienia
+model OrderNote {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  content   String
+  isInternal Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// Strony (regulaminy, polityki, inne)
+model Page {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  slug        String
+  title       String
+  content     String   @db.Text
+  isPublished Boolean  @default(true)
+  showInFooter Boolean @default(false)
+  sortOrder   Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([slug, tenantId])
+  @@index([tenantId])
+}
+
+// FAQ
+model FaqItem {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  question    String
+  answer      String   @db.Text
+  category    String?
+  isPublished Boolean  @default(true)
+  sortOrder   Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+// Szablony email
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  type        EmailTemplateType
+  subject     String
+  bodyHtml    String   @db.Text
+  bodyText    String?  @db.Text
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([type, tenantId])
+  @@index([tenantId])
+}
+
+enum EmailTemplateType {
+  ORDER_CONFIRMATION   // Potwierdzenie zamowienia
+  PAYMENT_RECEIVED     // Platnosc otrzymana
+  ORDER_PROCESSING     // Zamowienie w realizacji
+  ORDER_SHIPPED        // Zamowienie wyslane
+  ORDER_COMPLETED      // Zamowienie zakonczone
+  ORDER_CANCELLED      // Zamowienie anulowane
+  PASSWORD_RESET       // Reset hasla
+  WELCOME              // Powitanie
+}
